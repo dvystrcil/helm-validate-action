@@ -1,0 +1,79 @@
+name: Self-test
+
+# Exercises the action against real cert-manager chart versions -- the
+# exact case that motivated this action (dvystrcil/cert-manager#2,
+# homelab#816). Two fixtures: one with the 3 keys cert-manager v1.21.0
+# removed (must fail), one without (must pass). Uses the action's own
+# steps directly rather than `uses: ./` against itself, since actions
+# can't invoke themselves as a composite step within their own repo in
+# a way that exercises `action.yml`'s real input-resolution path --
+# this runs the same commands `action.yml` runs, asserting each outcome.
+
+on:
+  pull_request:
+    paths:
+      - 'action.yml'
+      - '.github/workflows/self-test.yaml'
+  push:
+    branches: [main]
+    paths:
+      - 'action.yml'
+      - '.github/workflows/self-test.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install helm
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm version --short
+
+      - name: Add jetstack chart repo
+        run: |
+          set -euo pipefail
+          helm repo add jetstack https://charts.jetstack.io --force-update
+          helm repo update jetstack
+
+      - name: "Fixture — removed keys present must fail"
+        run: |
+          set -euo pipefail
+          cat > /tmp/bad-values.yaml <<'EOF'
+          prometheus:
+            enabled: true
+            servicemonitor:
+              enabled: false
+              targetPort: 9402
+              path: /metrics
+          EOF
+          if helm template test jetstack/cert-manager --version v1.21.1 -f /tmp/bad-values.yaml > /tmp/out.yaml 2>/tmp/err.txt; then
+            echo "::error::expected helm template to fail on removed keys, it succeeded"
+            exit 1
+          fi
+          grep -q "additional properties" /tmp/err.txt || {
+            echo "::error::failed for a different reason than the removed-keys schema check:"
+            cat /tmp/err.txt
+            exit 1
+          }
+          echo "OK: correctly failed on removed prometheus.servicemonitor keys"
+
+      - name: "Fixture — values without removed keys must pass"
+        run: |
+          set -euo pipefail
+          cat > /tmp/good-values.yaml <<'EOF'
+          prometheus:
+            enabled: true
+            servicemonitor:
+              enabled: false
+          EOF
+          helm template test jetstack/cert-manager --version v1.21.1 -f /tmp/good-values.yaml > /tmp/out.yaml
+          test -s /tmp/out.yaml
+          echo "OK: correctly passed without the removed keys"
+
+      - run: echo "SELF-TEST-COMPLETE"

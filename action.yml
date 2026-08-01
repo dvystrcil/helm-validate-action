@@ -1,0 +1,88 @@
+name: helm-validate
+description: >
+  PR-time validation for repos that supply a values.yaml to a remote Helm
+  chart pinned in a DIFFERENT repo (this homelab's split-repo pattern:
+  the chart version lives in an ArgoCD Application's sources[], the
+  values.yaml lives here). Renders `helm template <chart> --version
+  <pinned>` against this repo's values.yaml and fails on any schema
+  violation -- catches "this value isn't valid for the chart version
+  we're actually running" without anyone having to read the chart's
+  changelog by hand. See README for the .chart-version + Renovate
+  grouping convention this pairs with.
+
+inputs:
+  chart-repo:
+    description: Helm chart repository URL (e.g. https://charts.jetstack.io).
+    required: true
+  chart-name:
+    description: Chart name within that repository (e.g. cert-manager).
+    required: true
+  chart-version-file:
+    description: >
+      Path to a file containing just the pinned chart semver (no leading
+      "v" unless the chart itself uses one -- match whatever the ArgoCD
+      Application's targetRevision uses). Default .chart-version.
+    default: .chart-version
+  values-file:
+    description: Path to the values.yaml to validate.
+    default: values.yaml
+  helm-set:
+    description: >
+      Extra --set/--set-string args to pass to helm template, space-
+      separated (e.g. for values that are only valid combined with a
+      flag this repo doesn't itself set). Rarely needed.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install helm
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v helm >/dev/null; then
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        fi
+        helm version --short
+
+    - name: Read pinned chart version
+      id: version
+      shell: bash
+      run: |
+        set -euo pipefail
+        f="${{ inputs.chart-version-file }}"
+        [ -f "$f" ] || {
+          echo "::error::chart-version-file not found: $f -- see README for the .chart-version convention"
+          exit 1
+        }
+        v=$(tr -d '[:space:]' < "$f")
+        [ -n "$v" ] || { echo "::error::$f is empty"; exit 1; }
+        echo "version=$v" >> "$GITHUB_OUTPUT"
+        echo "Validating against chart version: $v"
+
+    - name: Add chart repo
+      shell: bash
+      run: |
+        set -euo pipefail
+        helm repo add helm-validate-target "${{ inputs.chart-repo }}" --force-update
+        helm repo update helm-validate-target
+
+    - name: helm template (schema validation)
+      shell: bash
+      run: |
+        set -euo pipefail
+        [ -f "${{ inputs.values-file }}" ] || {
+          echo "::error::values-file not found: ${{ inputs.values-file }}"
+          exit 1
+        }
+        # helm template performs full values-schema validation against
+        # the chart's values.schema.json (when the chart ships one --
+        # jetstack's cert-manager chart does, since v1.19). A removed,
+        # renamed, or type-changed key fails here with a clear message
+        # naming the offending path -- no changelog-reading required.
+        helm template test-release "helm-validate-target/${{ inputs.chart-name }}" \
+          --version "${{ steps.version.outputs.version }}" \
+          -f "${{ inputs.values-file }}" \
+          ${{ inputs.helm-set }} \
+          > /tmp/helm-validate-rendered.yaml
+        echo "HELM-VALIDATE-COMPLETE"
