@@ -25,7 +25,41 @@ problem directly (a chart's `values.schema.json`, when it ships one,
 rejects removed/renamed/type-changed keys with a specific error naming
 the exact path) — no changelog-reading required.
 
-## The `.chart-version` convention
+## Reading the version from the Application (v2, preferred)
+
+Since v2 the action can read the pin straight from the ArgoCD
+`Application` — the one that actually deploys — instead of a copy:
+
+```yaml
+jobs:
+  helm:
+    runs-on: prometheus-runner        # in-cluster: the CICD App key is in Infisical
+    steps:
+      # ... Infisical + actions/create-github-app-token (read on argocd-projects) ...
+      - uses: actions/checkout@v7
+      - uses: dvystrcil/helm-validate-action@v2
+        with:
+          chart-repo: https://prometheus-community.github.io/helm-charts
+          chart-name: kube-prometheus-stack
+          argocd-application: prometheus/prometheus.yaml
+          github-token: ${{ steps.app-token.outputs.token }}
+```
+
+It uses the `targetRevision` of the source whose `chart:` equals
+`chart-name` (`source:` or `sources:`), and fails rather than guessing
+when there is no such source, no `targetRevision`, a templated one, or two
+different pins. It needs `python3` with PyYAML (the homelab ARC runner
+image has both). A `repoURL` that differs from `chart-repo` is a warning.
+
+Why: two pins drift, and the dangerous direction is the gate moving ahead
+of the shadow — the cluster upgrades while CI keeps validating the old
+chart. It happened three times by 2026-09-26 (homelab
+`architecture/chart-version-source-of-truth.md`, homelab#1443). Migrate a
+repo by switching to `@v2`, adding these two inputs, and deleting its
+`.chart-version` plus the Renovate rule that bumps it. Without
+`argocd-application`, v2 behaves exactly like v1.
+
+## The `.chart-version` convention (v1, being retired)
 
 The chart version pin lives in two places by design:
 
@@ -74,6 +108,10 @@ Inputs:
 | `chart-repo` | *required* | Helm chart repository URL |
 | `chart-name` | *required* | Chart name within that repo |
 | `chart-version-file` | `.chart-version` | File with the pinned chart version |
+| `argocd-application` | *(empty)* | v2: Application path in `argocd-projects-repo`; when set, `chart-version-file` is ignored |
+| `github-token` | *(empty)* | v2: token that can read `argocd-projects-repo` |
+| `argocd-projects-repo` | `dvystrcil/argocd-projects` | v2: repo holding the Applications |
+| `argocd-projects-ref` | `main` | v2: ref to read (main is what deploys) |
 | `values-file` | `values.yaml` | Values file to validate |
 | `helm-set` | *(empty)* | Extra `--set`/`--set-string` args, rarely needed |
 
