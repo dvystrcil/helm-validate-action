@@ -33,16 +33,17 @@ Since v2 the action can read the pin straight from the ArgoCD
 ```yaml
 jobs:
   helm:
-    runs-on: prometheus-runner        # in-cluster: the CICD App key is in Infisical
+    # The homelab's <repo>-helm-runner sets mount a read-only argocd-projects
+    # token, minted every 20 min by cluster-ops' argocd-projects-token.
+    runs-on: prometheus-helm-runner
     steps:
-      # ... Infisical + actions/create-github-app-token (read on argocd-projects) ...
       - uses: actions/checkout@v7
       - uses: dvystrcil/helm-validate-action@v2
         with:
           chart-repo: https://prometheus-community.github.io/helm-charts
           chart-name: kube-prometheus-stack
           argocd-application: prometheus/prometheus.yaml
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token-file: /etc/argocd-projects-token/token
 ```
 
 It uses the `targetRevision` of the source whose `chart:` equals
@@ -110,6 +111,7 @@ Inputs:
 | `chart-version-file` | `.chart-version` | File with the pinned chart version |
 | `argocd-application` | *(empty)* | v2: Application path in `argocd-projects-repo`; when set, `chart-version-file` is ignored |
 | `github-token` | *(empty)* | v2: token that can read `argocd-projects-repo` |
+| `github-token-file` | *(empty)* | v2: file holding that token; fails clearly if empty or past a sibling `expires_at` |
 | `argocd-projects-repo` | `dvystrcil/argocd-projects` | v2: repo holding the Applications |
 | `argocd-projects-ref` | `main` | v2: ref to read (main is what deploys) |
 | `values-file` | `values.yaml` | Values file to validate |

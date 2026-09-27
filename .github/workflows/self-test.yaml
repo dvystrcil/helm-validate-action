@@ -143,3 +143,70 @@ jobs:
           set -euo pipefail
           [ "$ABSENT" = failure ] || { echo "::error::unpinned chart did not fail (outcome=$ABSENT)"; exit 1; }
           echo "ARGOCD-APPLICATION-COMPLETE"
+
+  # github-token-file: the path the homelab <repo>-helm-runner sets use.
+  token-file:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Provide PyYAML
+        run: python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y -qq python3-yaml
+      - name: Token files (valid, empty, expired)
+        env:
+          T: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ok /tmp/empty /tmp/expired
+          printf '%s' "$T" > /tmp/ok/token
+          date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ > /tmp/ok/expires_at
+          : > /tmp/empty/token
+          printf '%s' "$T" > /tmp/expired/token
+          echo 2026-01-01T00:00:00Z > /tmp/expired/expires_at
+          printf 'prometheus:\n  enabled: true\n' > /tmp/good-values.yaml
+
+      - name: "A valid token file reads the Application"
+        uses: ./
+        with:
+          chart-repo: https://charts.jetstack.io
+          chart-name: cert-manager
+          values-file: /tmp/good-values.yaml
+          argocd-application: tests/fixtures/cert-manager-application.yaml
+          github-token-file: /tmp/ok/token
+          argocd-projects-repo: ${{ github.repository }}
+          argocd-projects-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: "An empty token file must fail"
+        id: empty
+        continue-on-error: true
+        uses: ./
+        with:
+          chart-repo: https://charts.jetstack.io
+          chart-name: cert-manager
+          values-file: /tmp/good-values.yaml
+          argocd-application: tests/fixtures/cert-manager-application.yaml
+          github-token-file: /tmp/empty/token
+          argocd-projects-repo: ${{ github.repository }}
+          argocd-projects-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: "An expired token must fail"
+        id: expired
+        continue-on-error: true
+        uses: ./
+        with:
+          chart-repo: https://charts.jetstack.io
+          chart-name: cert-manager
+          values-file: /tmp/good-values.yaml
+          argocd-application: tests/fixtures/cert-manager-application.yaml
+          github-token-file: /tmp/expired/token
+          argocd-projects-repo: ${{ github.repository }}
+          argocd-projects-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Assert outcomes
+        env:
+          EMPTY: ${{ steps.empty.outcome }}
+          EXPIRED: ${{ steps.expired.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$EMPTY" = failure ] || { echo "::error::empty token file did not fail ($EMPTY)"; exit 1; }
+          [ "$EXPIRED" = failure ] || { echo "::error::expired token did not fail ($EXPIRED)"; exit 1; }
+          echo "TOKEN-FILE-COMPLETE"

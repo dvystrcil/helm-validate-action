@@ -36,6 +36,14 @@ inputs:
       Token that can read argocd-projects-repo. Required with
       argocd-application when that repo is private.
     default: ""
+  github-token-file:
+    description: >
+      Path to a file holding that token, instead of github-token (e.g.
+      /etc/argocd-projects-token/token, mounted on the homelab
+      <repo>-helm-runner sets). If an `expires_at` file sits beside it and
+      is in the past, the action fails and says so rather than surfacing a
+      bare 401.
+    default: ""
   argocd-projects-repo:
     description: owner/name of the repo holding the ArgoCD Applications.
     default: dvystrcil/argocd-projects
@@ -71,6 +79,7 @@ runs:
       env:
         APP: ${{ inputs.argocd-application }}
         GH_TOKEN: ${{ inputs.github-token }}
+        TOKEN_FILE: ${{ inputs.github-token-file }}
         PROJECTS_REPO: ${{ inputs.argocd-projects-repo }}
         PROJECTS_REF: ${{ inputs.argocd-projects-ref }}
         CHART: ${{ inputs.chart-name }}
@@ -86,6 +95,23 @@ runs:
             echo "::error::argocd-application needs python3 with PyYAML (the homelab ARC runner image has it)"
             exit 1
           }
+          if [ -n "${TOKEN_FILE:-}" ]; then
+            # Read, never echo: the value goes straight into gh's env.
+            [ -s "$TOKEN_FILE" ] || {
+              echo "::error::github-token-file $TOKEN_FILE is missing or empty -- is the token Secret mounted and minted? (cluster-ops argocd-projects-token)"
+              exit 1
+            }
+            exp_file="$(dirname "$TOKEN_FILE")/expires_at"
+            if [ -s "$exp_file" ]; then
+              exp=$(tr -d '[:space:]' < "$exp_file")
+              if [ "$(date -u -d "$exp" +%s)" -le "$(date -u +%s)" ]; then
+                echo "::error::token in $TOKEN_FILE expired at $exp -- the minter has stopped (cluster-ops argocd-projects-token)"
+                exit 1
+              fi
+            fi
+            GH_TOKEN=$(tr -d '[:space:]' < "$TOKEN_FILE")
+            export GH_TOKEN
+          fi
           [ -n "${GH_TOKEN:-}" ] || echo "::warning::no github-token: reading $PROJECTS_REPO anonymously (fails if private)"
           app="$RUNNER_TEMP/helm-validate-application.yaml"
           gh api "repos/$PROJECTS_REPO/contents/$APP?ref=$PROJECTS_REF" \
