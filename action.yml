@@ -23,6 +23,26 @@ inputs:
       "v" unless the chart itself uses one -- match whatever the ArgoCD
       Application's targetRevision uses). Default .chart-version.
     default: .chart-version
+  argocd-application:
+    description: >
+      Path of the ArgoCD Application in argocd-projects-repo that pins
+      this chart (e.g. prometheus/prometheus.yaml). When set, the version
+      is that source's targetRevision -- the pin that actually deploys --
+      and chart-version-file is ignored (homelab#1443 option A). Leave
+      unset to keep reading chart-version-file.
+    default: ""
+  github-token:
+    description: >
+      Token that can read argocd-projects-repo. Required with
+      argocd-application when that repo is private.
+    default: ""
+  argocd-projects-repo:
+    description: owner/name of the repo holding the ArgoCD Applications.
+    default: dvystrcil/argocd-projects
+  argocd-projects-ref:
+    description: >
+      Ref of argocd-projects-repo to read. main is what ArgoCD deploys.
+    default: main
   values-file:
     description: Path to the values.yaml to validate.
     default: values.yaml
@@ -48,17 +68,46 @@ runs:
     - name: Read pinned chart version
       id: version
       shell: bash
+      env:
+        APP: ${{ inputs.argocd-application }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        PROJECTS_REPO: ${{ inputs.argocd-projects-repo }}
+        PROJECTS_REF: ${{ inputs.argocd-projects-ref }}
+        CHART: ${{ inputs.chart-name }}
+        CHART_REPO: ${{ inputs.chart-repo }}
+        VERSION_FILE: ${{ inputs.chart-version-file }}
+        RESOLVER: ${{ github.action_path }}/resolve-chart-version.py
       run: |
         set -euo pipefail
-        f="${{ inputs.chart-version-file }}"
-        [ -f "$f" ] || {
-          echo "::error::chart-version-file not found: $f -- see README for the .chart-version convention"
-          exit 1
-        }
-        v=$(tr -d '[:space:]' < "$f")
-        [ -n "$v" ] || { echo "::error::$f is empty"; exit 1; }
+        if [ -n "$APP" ]; then
+          # The Application's targetRevision is the pin that deploys; a
+          # .chart-version is a copy that can drift from it.
+          python3 -c 'import yaml' 2>/dev/null || {
+            echo "::error::argocd-application needs python3 with PyYAML (the homelab ARC runner image has it)"
+            exit 1
+          }
+          [ -n "${GH_TOKEN:-}" ] || echo "::warning::no github-token: reading $PROJECTS_REPO anonymously (fails if private)"
+          app="$RUNNER_TEMP/helm-validate-application.yaml"
+          gh api "repos/$PROJECTS_REPO/contents/$APP?ref=$PROJECTS_REF" \
+            -H "Accept: application/vnd.github.raw" > "$app" || {
+            echo "::error::could not read $APP from $PROJECTS_REPO@$PROJECTS_REF"
+            exit 1
+          }
+          v=$(python3 "$RESOLVER" "$app" "$CHART" "$CHART_REPO") || {
+            echo "::error::no usable $CHART pin in $PROJECTS_REPO/$APP@$PROJECTS_REF (reason above)"
+            exit 1
+          }
+          echo "Validating against chart version: $v ($PROJECTS_REPO/$APP@$PROJECTS_REF)"
+        else
+          [ -f "$VERSION_FILE" ] || {
+            echo "::error::chart-version-file not found: $VERSION_FILE -- see README for the .chart-version convention"
+            exit 1
+          }
+          v=$(tr -d '[:space:]' < "$VERSION_FILE")
+          [ -n "$v" ] || { echo "::error::$VERSION_FILE is empty"; exit 1; }
+          echo "Validating against chart version: $v ($VERSION_FILE)"
+        fi
         echo "version=$v" >> "$GITHUB_OUTPUT"
-        echo "Validating against chart version: $v"
 
     - name: Add chart repo
       shell: bash

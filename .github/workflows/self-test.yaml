@@ -13,11 +13,15 @@ on:
   pull_request:
     paths:
       - 'action.yml'
+      - 'resolve-chart-version.py'
+      - 'tests/**'
       - '.github/workflows/self-test.yaml'
   push:
     branches: [main]
     paths:
       - 'action.yml'
+      - 'resolve-chart-version.py'
+      - 'tests/**'
       - '.github/workflows/self-test.yaml'
 
 permissions:
@@ -77,3 +81,65 @@ jobs:
           echo "OK: correctly passed without the removed keys"
 
       - run: echo "SELF-TEST-COMPLETE"
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolver unit tests
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y -qq python3-yaml
+          python3 -m unittest discover -s tests -v
+      - run: echo "UNIT-COMPLETE"
+
+  # The argocd-application path through the REAL action.yml (uses: ./),
+  # reading a fixture Application from this repo at this commit -- this repo
+  # is public, so the fetch runs with the job's own token, same code path as
+  # a consumer passing a CICD App token for private argocd-projects.
+  argocd-application:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Provide PyYAML
+        run: python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y -qq python3-yaml
+      - name: Good values
+        run: |
+          cat > /tmp/good-values.yaml <<'EOF'
+          prometheus:
+            enabled: true
+          EOF
+
+      - name: "Gate version read from the Application must render"
+        id: good
+        uses: ./
+        with:
+          chart-repo: https://charts.jetstack.io
+          chart-name: cert-manager
+          values-file: /tmp/good-values.yaml
+          chart-version-file: /nonexistent  # proves the file is NOT read
+          argocd-application: tests/fixtures/cert-manager-application.yaml
+          github-token: ${{ github.token }}
+          argocd-projects-repo: ${{ github.repository }}
+          argocd-projects-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: "A chart the Application doesn't pin must fail, not default"
+        id: absent
+        continue-on-error: true
+        uses: ./
+        with:
+          chart-repo: https://charts.jetstack.io
+          chart-name: not-a-pinned-chart
+          values-file: /tmp/good-values.yaml
+          argocd-application: tests/fixtures/cert-manager-application.yaml
+          github-token: ${{ github.token }}
+          argocd-projects-repo: ${{ github.repository }}
+          argocd-projects-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Assert outcomes
+        env:
+          ABSENT: ${{ steps.absent.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$ABSENT" = failure ] || { echo "::error::unpinned chart did not fail (outcome=$ABSENT)"; exit 1; }
+          echo "ARGOCD-APPLICATION-COMPLETE"

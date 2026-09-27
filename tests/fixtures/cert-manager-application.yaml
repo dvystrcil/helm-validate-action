@@ -1,0 +1,18 @@
+# Fixture for the self-test's argocd-application path: same shape as
+# argocd-projects/cert-manager/cert-manager.yaml (a chart source plus the
+# $values git source, whose targetRevision HEAD must NOT be picked).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cert-manager
+spec:
+  sources:
+  - repoURL: https://charts.jetstack.io
+    chart: cert-manager
+    targetRevision: v1.21.1
+    helm:
+      valueFiles:
+      - $values/values.yaml
+  - repoURL: https://github.com/dvystrcil/cert-manager.git
+    targetRevision: HEAD
+    ref: values
