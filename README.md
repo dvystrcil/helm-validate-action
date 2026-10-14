@@ -117,6 +117,24 @@ Inputs:
 | `values-file` | `values.yaml` | Values file to validate |
 | `helm-set` | *(empty)* | Extra `--set`/`--set-string` args, rarely needed |
 
+## Outputs
+
+| output | what |
+|---|---|
+| `chart-version` | the version this run validated against, as resolved |
+| `rendered-file` | path of the `helm template` output (release name `test-release`) |
+
+Use them for any extra assertion on the render instead of restating the chart
+pin in your own workflow. A second pin drifts: dvystrcil/longhorn's render
+check hard-coded 1.12.0 for two weeks while the cluster ran 1.13.0.
+
+```yaml
+- id: helm
+  uses: dvystrcil/helm-validate-action@v2
+  with: { ... }
+- run: python3 check.py "${{ steps.helm.outputs.rendered-file }}"
+```
+
 ## What this deliberately does NOT do
 
 - **Doesn't sync `.chart-version` with the live ArgoCD Application** —
