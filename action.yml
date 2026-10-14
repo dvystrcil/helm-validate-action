@@ -61,6 +61,20 @@ inputs:
       flag this repo doesn't itself set). Rarely needed.
     default: ""
 
+outputs:
+  chart-version:
+    description: >-
+      The chart version this run validated against, as resolved from the
+      Application (or chart-version-file). Use it for any further render
+      instead of restating a pin: dvystrcil/longhorn's render assertions
+      hard-coded 1.12.0 while the cluster ran 1.13.0.
+    value: ${{ steps.version.outputs.version }}
+  rendered-file:
+    description: >-
+      Path of the manifests `helm template` produced, for assertions on what
+      actually ships (release name test-release).
+    value: ${{ steps.render.outputs.file }}
+
 runs:
   using: composite
   steps:
@@ -143,6 +157,7 @@ runs:
         helm repo update helm-validate-target
 
     - name: helm template (schema validation)
+      id: render
       shell: bash
       run: |
         set -euo pipefail
@@ -160,4 +175,5 @@ runs:
           -f "${{ inputs.values-file }}" \
           ${{ inputs.helm-set }} \
           > /tmp/helm-validate-rendered.yaml
+        echo "file=/tmp/helm-validate-rendered.yaml" >> "$GITHUB_OUTPUT"
         echo "HELM-VALIDATE-COMPLETE"

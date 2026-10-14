@@ -139,9 +139,19 @@ jobs:
       - name: Assert outcomes
         env:
           ABSENT: ${{ steps.absent.outcome }}
+          GOOD_VERSION: ${{ steps.good.outputs.chart-version }}
+          GOOD_RENDER: ${{ steps.good.outputs.rendered-file }}
         run: |
           set -euo pipefail
           [ "$ABSENT" = failure ] || { echo "::error::unpinned chart did not fail (outcome=$ABSENT)"; exit 1; }
+          # The outputs (dvystrcil/longhorn: its render assertions hard-coded
+          # 1.12.0 while the cluster ran 1.13.0). A consumer must get the
+          # version the ACTION resolved and the file it rendered, not re-derive
+          # either. Expected version read from the fixture, not restated.
+          want=$(python3 -c "import yaml; d=yaml.safe_load(open('tests/fixtures/cert-manager-application.yaml')); print(next(s['targetRevision'] for s in d['spec']['sources'] if s.get('chart')=='cert-manager'))")
+          [ -n "$GOOD_VERSION" ] && [ "$GOOD_VERSION" = "$want" ] || { echo "::error::chart-version output '$GOOD_VERSION', want '$want'"; exit 1; }
+          [ -s "$GOOD_RENDER" ] || { echo "::error::rendered-file output '$GOOD_RENDER' is missing or empty"; exit 1; }
+          grep -q '^kind: Deployment' "$GOOD_RENDER" || { echo "::error::rendered-file holds no manifests"; exit 1; }
           echo "ARGOCD-APPLICATION-COMPLETE"
 
   # github-token-file: the path the homelab <repo>-helm-runner sets use.
