@@ -1,0 +1,9 @@
+# Valid YAML, no duplicates, but the chart reads
+# prometheus.prometheusSpec.resources, not prometheus.resources. Must FAIL.
+prometheus:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 2Gi
+    limits:
+      memory: 5Gi

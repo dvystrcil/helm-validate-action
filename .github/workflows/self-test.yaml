@@ -14,6 +14,7 @@ on:
     paths:
       - 'action.yml'
       - 'resolve-chart-version.py'
+      - 'check-values-landing.py'
       - 'tests/**'
       - '.github/workflows/self-test.yaml'
   push:
@@ -21,6 +22,7 @@ on:
     paths:
       - 'action.yml'
       - 'resolve-chart-version.py'
+      - 'check-values-landing.py'
       - 'tests/**'
       - '.github/workflows/self-test.yaml'
 
@@ -89,7 +91,7 @@ jobs:
       - name: Resolver unit tests
         run: |
           set -euo pipefail
-          python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y -qq python3-yaml
+          python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq python3-yaml; }
           python3 -m unittest discover -s tests -v
       - run: echo "UNIT-COMPLETE"
 
@@ -102,7 +104,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Provide PyYAML
-        run: python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y -qq python3-yaml
+        run: python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq python3-yaml; }
       - name: Good values
         run: |
           cat > /tmp/good-values.yaml <<'EOF'
@@ -160,7 +162,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Provide PyYAML
-        run: python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y -qq python3-yaml
+        run: python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq python3-yaml; }
       - name: Token files (valid, empty, expired)
         env:
           T: ${{ github.token }}
@@ -220,3 +222,88 @@ jobs:
           [ "$EMPTY" = failure ] || { echo "::error::empty token file did not fail ($EMPTY)"; exit 1; }
           [ "$EXPIRED" = failure ] || { echo "::error::expired token did not fail ($EXPIRED)"; exit 1; }
           echo "TOKEN-FILE-COMPLETE"
+
+  # The values-landing check through the REAL action.yml (uses: ./), against
+  # the chart that motivated it: kube-prometheus-stack, which has no values
+  # schema, so helm renders every one of these fixtures cleanly. Only the
+  # landing check can tell them apart (dvystrcil/prometheus#66,
+  # dvystrcil/homelab#1830 AC2).
+  values-landing:
+    runs-on: ubuntu-latest
+    env:
+      CHART_REPO: https://prometheus-community.github.io/helm-charts
+      RELOADER: prometheusOperator.prometheusConfigReloader.resources
+    steps:
+      - uses: actions/checkout@v7
+      - name: Provide PyYAML
+        run: python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq python3-yaml; }
+
+      - name: "#66 shape (duplicate keys under the rules map) must fail"
+        id: issue66
+        continue-on-error: true
+        uses: ./
+        with:
+          chart-repo: ${{ env.CHART_REPO }}
+          chart-name: kube-prometheus-stack
+          chart-version-file: tests/fixtures/landing/kube-prometheus-stack.version
+          values-file: tests/fixtures/landing/issue-66.yaml
+
+      - name: "A block at a path the chart does not read must fail"
+        id: wrongpath
+        continue-on-error: true
+        uses: ./
+        with:
+          chart-repo: ${{ env.CHART_REPO }}
+          chart-name: kube-prometheus-stack
+          chart-version-file: tests/fixtures/landing/kube-prometheus-stack.version
+          values-file: tests/fixtures/landing/wrong-path.yaml
+
+      - name: "An args-rendered block left undeclared must fail"
+        id: undeclared
+        continue-on-error: true
+        uses: ./
+        with:
+          chart-repo: ${{ env.CHART_REPO }}
+          chart-name: kube-prometheus-stack
+          chart-version-file: tests/fixtures/landing/kube-prometheus-stack.version
+          values-file: tests/fixtures/landing/correct.yaml
+
+      - name: "Correct paths, args-rendered block declared, must pass"
+        uses: ./
+        with:
+          chart-repo: ${{ env.CHART_REPO }}
+          chart-name: kube-prometheus-stack
+          chart-version-file: tests/fixtures/landing/kube-prometheus-stack.version
+          values-file: tests/fixtures/landing/correct.yaml
+          resources-rendered-elsewhere: ${{ env.RELOADER }}
+
+      - name: Assert outcomes
+        env:
+          ISSUE66: ${{ steps.issue66.outcome }}
+          WRONGPATH: ${{ steps.wrongpath.outcome }}
+          UNDECLARED: ${{ steps.undeclared.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$ISSUE66" = failure ] || { echo "::error::#66 shape did not fail ($ISSUE66)"; exit 1; }
+          [ "$WRONGPATH" = failure ] || { echo "::error::wrong-path block did not fail ($WRONGPATH)"; exit 1; }
+          [ "$UNDECLARED" = failure ] || { echo "::error::undeclared args-rendered block did not fail ($UNDECLARED)"; exit 1; }
+
+          # A step outcome of `failure` says nothing about WHY. Prove each one
+          # failed for the landing reason, not a render or network error:
+          # same chart, same version, same script, asserting the exact finding.
+          v=$(cat tests/fixtures/landing/kube-prometheus-stack.version)
+          expect() {  # expect <fixture> <text the check must print>
+            helm template t kube-prometheus-stack --repo "$CHART_REPO" --version "$v" \
+              -f "tests/fixtures/landing/$1.yaml" > "$RUNNER_TEMP/$1.rendered"
+            if python3 check-values-landing.py "tests/fixtures/landing/$1.yaml" \
+                 "$RUNNER_TEMP/$1.rendered" > "$RUNNER_TEMP/$1.out"; then
+              echo "::error::$1 passed the landing check"; exit 1
+            fi
+            grep -qF "$2" "$RUNNER_TEMP/$1.out" || {
+              echo "::error::$1 failed, but not with: $2"; cat "$RUNNER_TEMP/$1.out"; exit 1; }
+            echo "OK: $1 -> $2"
+          }
+          expect issue-66 "duplicate key additionalPrometheusRulesMap.homelab-custom-rules.resources"
+          expect wrong-path "prometheus.resources is set in values but not in the render"
+          expect correct "$RELOADER is set in values but not in the render"
+          echo "VALUES-LANDING-SELFTEST-COMPLETE"

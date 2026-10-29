@@ -116,6 +116,7 @@ Inputs:
 | `argocd-projects-ref` | `main` | v2: ref to read (main is what deploys) |
 | `values-file` | `values.yaml` | Values file to validate |
 | `helm-set` | *(empty)* | Extra `--set`/`--set-string` args, rarely needed |
+| `resources-rendered-elsewhere` | *(empty)* | Dotted paths of `resources:` blocks the chart renders some other way than as a resources mapping (see below) |
 
 ## Outputs
 
@@ -134,6 +135,45 @@ check hard-coded 1.12.0 for two weeks while the cluster ran 1.13.0.
   with: { ... }
 - run: python3 check.py "${{ steps.helm.outputs.rendered-file }}"
 ```
+
+## Values reach the render
+
+After `helm template`, the action checks the values file against what it
+rendered (`check-values-landing.py`). It runs on every consumer and has no
+off switch:
+
+1. **No duplicate mapping keys**, anywhere in the file. YAML (PyYAML and
+   helm alike) keeps the last one and drops the rest without a word.
+2. **Every non-empty `resources:` block lands.** Each one must equal a
+   `resources:` mapping somewhere in the render, comparing quantities by
+   value (`1Gi` = `1024Mi`, `1` = `1000m`) and allowing extra keys from
+   chart defaults.
+
+Why: in dvystrcil/prometheus#66 three `resources:` blocks were indented under
+commented-out parents, so YAML nested them as duplicate keys under
+`additionalPrometheusRulesMap.homelab-custom-rules`. The file was valid YAML,
+kube-prometheus-stack has no values schema to reject it, `helm template`
+rendered cleanly, and Prometheus ran BestEffort for three months. A block at
+a plausible but wrong path (`prometheus.resources` instead of
+`prometheus.prometheusSpec.resources`) fails the same way, with no
+duplicate key to give it away. The check needs no per-chart knowledge: the
+render is the authority on what landed.
+
+**A chart that renders resources some other way** (kube-prometheus-stack
+turns `prometheusOperator.prometheusConfigReloader.resources` into
+`--config-reloader-*` operator flags) needs that path declared:
+
+```yaml
+- uses: dvystrcil/helm-validate-action@v2
+  with:
+    # ...
+    resources-rendered-elsewhere: prometheusOperator.prometheusConfigReloader.resources
+```
+
+Declarations are checked in both directions. An entry naming no block
+fails as stale, and an entry whose block does land as a mapping fails as
+unnecessary, so the list cannot quietly excuse the next block written at a
+path that stopped being special.
 
 ## What this deliberately does NOT do
 

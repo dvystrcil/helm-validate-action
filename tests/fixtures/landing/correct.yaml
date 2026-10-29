@@ -1,0 +1,27 @@
+# Every block at the path the chart reads. prometheusConfigReloader renders
+# as operator flags, so it passes only when declared in
+# resources-rendered-elsewhere.
+prometheus:
+  prometheusSpec:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 2Gi
+      limits:
+        memory: 5Gi
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
+prometheusOperator:
+  prometheusConfigReloader:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 64Mi

@@ -7,8 +7,10 @@ description: >
   <pinned>` against this repo's values.yaml and fails on any schema
   violation -- catches "this value isn't valid for the chart version
   we're actually running" without anyone having to read the chart's
-  changelog by hand. See README for the .chart-version + Renovate
-  grouping convention this pairs with.
+  changelog by hand. Then checks the values file against that render:
+  no duplicate keys, and every `resources:` block reaches a rendered
+  resources mapping (dvystrcil/prometheus#66). See README for the
+  .chart-version + Renovate grouping convention this pairs with.
 
 inputs:
   chart-repo:
@@ -59,6 +61,16 @@ inputs:
       Extra --set/--set-string args to pass to helm template, space-
       separated (e.g. for values that are only valid combined with a
       flag this repo doesn't itself set). Rarely needed.
+    default: ""
+  resources-rendered-elsewhere:
+    description: >
+      Space- or newline-separated dotted paths of `resources:` blocks in
+      values-file that the chart renders some other way than as a
+      resources mapping, so the values-landing check cannot find them in
+      the render (e.g. kube-prometheus-stack turns
+      prometheusOperator.prometheusConfigReloader.resources into operator
+      flags). Each entry must name a block that exists and does NOT land
+      as a mapping; a stale or unnecessary entry fails the check.
     default: ""
 
 outputs:
@@ -174,6 +186,30 @@ runs:
           --version "${{ steps.version.outputs.version }}" \
           -f "${{ inputs.values-file }}" \
           ${{ inputs.helm-set }} \
-          > /tmp/helm-validate-rendered.yaml
-        echo "file=/tmp/helm-validate-rendered.yaml" >> "$GITHUB_OUTPUT"
+          > "$RUNNER_TEMP/helm-validate-rendered.yaml"
+        echo "file=$RUNNER_TEMP/helm-validate-rendered.yaml" >> "$GITHUB_OUTPUT"
         echo "HELM-VALIDATE-COMPLETE"
+
+    - name: Values reach the render (duplicate keys, resources landing)
+      shell: bash
+      env:
+        VALUES: ${{ inputs.values-file }}
+        RENDERED: ${{ steps.render.outputs.file }}
+        ELSEWHERE: ${{ inputs.resources-rendered-elsewhere }}
+        CHECK: ${{ github.action_path }}/check-values-landing.py
+      run: |
+        set -euo pipefail
+        # A values file can be valid YAML, pass the chart's schema and render
+        # cleanly while configuring nothing: prometheus#66's three resources
+        # blocks became duplicate keys under a rules map the chart ignores,
+        # and Prometheus ran BestEffort for three months. The render is the
+        # authority on what landed, so no per-chart knowledge is needed.
+        python3 -c 'import yaml' 2>/dev/null || {
+          echo "::error::the values-landing check needs python3 with PyYAML (the homelab ARC runner image has it)"
+          exit 1
+        }
+        # The paths reach the script as words, never as shell globs.
+        set -f
+        read -ra elsewhere <<< "$(printf '%s' "$ELSEWHERE" | tr '\n' ' ')"
+        set +f
+        python3 "$CHECK" "$VALUES" "$RENDERED" "${elsewhere[@]}"
