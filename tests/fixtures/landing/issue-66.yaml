@@ -1,0 +1,21 @@
+# dvystrcil/prometheus#66: resources blocks indented under commented-out
+# parents become duplicate keys under the rules map. Must FAIL.
+additionalPrometheusRulesMap:
+  homelab-custom-rules:
+    groups: []
+# prometheus:
+#   prometheusSpec:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 2Gi
+      limits:
+        memory: 5Gi
+# alertmanager:
+#   alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
