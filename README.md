@@ -60,6 +60,33 @@ repo by switching to `@v2`, adding these two inputs, and deleting its
 `.chart-version` plus the Renovate rule that bumps it. Without
 `argocd-application`, v2 behaves exactly like v1.
 
+## Paired PRs: `Pairs-With` (homelab#2166)
+
+A chart bump that needs a values change is two PRs: the pin in
+argocd-projects and the values here. Each check read the *other* repo's
+`main`, so each validated against the half that had not landed. On
+2026-11-12 immich#59 (new values) passed against the old 0.8.5 pin, while
+argocd-projects#341 (the 0.13.4 pin) failed against the old values.
+Whichever merged first merged red.
+
+Put this line in **each** PR's body:
+
+```
+Pairs-With: dvystrcil/argocd-projects#341      <- in the app PR
+Pairs-With: dvystrcil/immich#59                <- in the argocd-projects PR
+```
+
+- Here, a pairing with `argocd-projects-repo` reads the Application at that
+  PR's head SHA. The gate's `validate-chart-bump.py` (homelab) does the
+  mirror image for the values.
+- The line has to *start* with the key. A mention mid-sentence is ignored,
+  and the URL form `https://github.com/<repo>/pull/N` works too.
+- The body is read live, so after adding the line, re-run the check. If this
+  repo's token cannot read pull requests, the event's copy is used and the
+  log says so.
+- A paired PR that was closed without merging fails the check. So do two
+  pairings with argocd-projects.
+
 ## The `.chart-version` convention (v1, being retired)
 
 The chart version pin lives in two places by design:
@@ -113,7 +140,8 @@ Inputs:
 | `github-token` | *(empty)* | v2: token that can read `argocd-projects-repo` |
 | `github-token-file` | *(empty)* | v2: file holding that token; fails clearly if empty or past a sibling `expires_at` |
 | `argocd-projects-repo` | `dvystrcil/argocd-projects` | v2: repo holding the Applications |
-| `argocd-projects-ref` | `main` | v2: ref to read (main is what deploys) |
+| `argocd-projects-ref` | `main` | v2: ref to read (main is what deploys). Left at `main`, a `Pairs-With` line moves it (below) |
+| `pairs-with` | `true` | `false` ignores `Pairs-With` lines in the PR body |
 | `values-file` | `values.yaml` | Values file to validate |
 | `helm-set` | *(empty)* | Extra `--set`/`--set-string` args, rarely needed |
 | `resources-rendered-elsewhere` | *(empty)* | Dotted paths of `resources:` blocks the chart renders some other way than as a resources mapping (see below) |

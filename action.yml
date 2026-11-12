@@ -57,7 +57,14 @@ inputs:
   argocd-projects-ref:
     description: >
       Ref of argocd-projects-repo to read. main is what ArgoCD deploys.
+      Left at main, a `Pairs-With: <argocd-projects-repo>#N` line in the PR
+      body reads the Application at that PR's head instead (homelab#2166);
+      any other value here wins over a pairing.
     default: main
+  pairs-with:
+    description: >
+      "false" ignores Pairs-With lines in the PR body. Default "true".
+    default: "true"
   values-file:
     description: Path to the values.yaml to validate.
     default: values.yaml
@@ -117,6 +124,11 @@ runs:
         CHART_REPO: ${{ inputs.chart-repo }}
         VERSION_FILE: ${{ inputs.chart-version-file }}
         RESOLVER: ${{ github.action_path }}/resolve-chart-version.py
+        PAIRS: ${{ github.action_path }}/pairs-with.py
+        PAIRS_ENABLED: ${{ inputs.pairs-with }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_EVENT_BODY: ${{ github.event.pull_request.body }}
+        OWN_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         if [ -n "$APP" ]; then
@@ -144,6 +156,24 @@ runs:
             export GH_TOKEN
           fi
           [ -n "${GH_TOKEN:-}" ] || echo "::warning::no github-token: reading $PROJECTS_REPO anonymously (fails if private)"
+          # Pairs-With (homelab#2166): a values PR paired with the pin PR in
+          # argocd-projects validates against that PR's head, not main's old
+          # pin. The body is read live because a re-run replays the original
+          # event; the event's copy is the fallback when this repo's token
+          # cannot read pull requests.
+          if [ "$PAIRS_ENABLED" = "true" ] && [ "$PROJECTS_REF" = "main" ] && [ -n "${PR_NUMBER:-}" ]; then
+            body=$(GH_TOKEN="$OWN_TOKEN" gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""' 2>/dev/null) || {
+              echo "::warning::could not read the body of #$PR_NUMBER live; using the event's copy (a Pairs-With added since will not be seen until the next push)"
+              body=$PR_EVENT_BODY
+            }
+            n=$(printf '%s' "$body" | python3 "$PAIRS" find "$PROJECTS_REPO") || {
+              echo "::error::Pairs-With: reason above"; exit 1; }
+            if [ -n "$n" ]; then
+              PROJECTS_REF=$(gh api "repos/$PROJECTS_REPO/pulls/$n" | python3 "$PAIRS" head) || {
+                echo "::error::Pairs-With $PROJECTS_REPO#$n: cannot use it (reason above)"; exit 1; }
+              echo "Pairs-With $PROJECTS_REPO#$n: reading $APP at $PROJECTS_REF"
+            fi
+          fi
           app="$RUNNER_TEMP/helm-validate-application.yaml"
           gh api "repos/$PROJECTS_REPO/contents/$APP?ref=$PROJECTS_REF" \
             -H "Accept: application/vnd.github.raw" > "$app" || {
