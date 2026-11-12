@@ -199,12 +199,16 @@ runs:
         # jetstack's cert-manager chart does, since v1.19). A removed,
         # renamed, or type-changed key fails here with a clear message
         # naming the offending path -- no changelog-reading required.
+        # A file per call: a job may call this action more than once, and a
+        # shared path would let a later (possibly failing, so truncated)
+        # render overwrite the file an earlier call's rendered-file names.
+        out=$(mktemp "$RUNNER_TEMP/helm-validate-rendered.XXXXXX")
         helm template test-release "${{ steps.repo.outputs.ref }}" \
           --version "${{ steps.version.outputs.version }}" \
           -f "${{ inputs.values-file }}" \
           ${{ inputs.helm-set }} \
-          > "$RUNNER_TEMP/helm-validate-rendered.yaml"
-        echo "file=$RUNNER_TEMP/helm-validate-rendered.yaml" >> "$GITHUB_OUTPUT"
+          > "$out"
+        echo "file=$out" >> "$GITHUB_OUTPUT"
         echo "HELM-VALIDATE-COMPLETE"
 
     - name: Values reach the render (duplicate keys, resources landing)
