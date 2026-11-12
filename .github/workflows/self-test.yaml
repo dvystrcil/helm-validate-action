@@ -173,18 +173,8 @@ jobs:
           # 0.10+ fails the render if a removed subchart key is present at all.
           { cat /tmp/good-values.yaml; printf 'postgresql:\n  enabled: false\n'; } > /tmp/bad-values.yaml
 
-      - name: "OCI pin read from the Application must render"
-        id: good
-        uses: ./
-        with:
-          chart-repo: ${{ env.CHART_REPO }}
-          chart-name: immich
-          values-file: /tmp/good-values.yaml
-          argocd-application: tests/fixtures/immich-oci-application.yaml
-          github-token: ${{ github.token }}
-          argocd-projects-repo: ${{ github.repository }}
-          argocd-projects-ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
+      # Bad case FIRST: every run writes the same rendered-file path, and a
+      # failing render truncates it, so the good run must be the last one.
       - name: "A removed key must fail against the OCI chart"
         id: bad
         continue-on-error: true
@@ -193,6 +183,18 @@ jobs:
           chart-repo: ${{ env.CHART_REPO }}
           chart-name: immich
           values-file: /tmp/bad-values.yaml
+          argocd-application: tests/fixtures/immich-oci-application.yaml
+          github-token: ${{ github.token }}
+          argocd-projects-repo: ${{ github.repository }}
+          argocd-projects-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: "OCI pin read from the Application must render"
+        id: good
+        uses: ./
+        with:
+          chart-repo: ${{ env.CHART_REPO }}
+          chart-name: immich
+          values-file: /tmp/good-values.yaml
           argocd-application: tests/fixtures/immich-oci-application.yaml
           github-token: ${{ github.token }}
           argocd-projects-repo: ${{ github.repository }}
