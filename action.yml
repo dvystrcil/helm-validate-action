@@ -14,7 +14,12 @@ description: >
 
 inputs:
   chart-repo:
-    description: Helm chart repository URL (e.g. https://charts.jetstack.io).
+    description: >-
+      Helm chart repository URL (e.g. https://charts.jetstack.io), or an OCI
+      registry path without the chart (e.g.
+      oci://ghcr.io/immich-app/immich-charts). For OCI the Application may use
+      ArgoCD's native form, `repoURL: oci://<path>/<chart-name>` with
+      `chart: '.'`.
     required: true
   chart-name:
     description: Chart name within that repository (e.g. cert-manager).
@@ -162,11 +167,23 @@ runs:
         echo "version=$v" >> "$GITHUB_OUTPUT"
 
     - name: Add chart repo
+      id: repo
       shell: bash
+      env:
+        CHART_REPO: ${{ inputs.chart-repo }}
+        CHART: ${{ inputs.chart-name }}
       run: |
         set -euo pipefail
-        helm repo add helm-validate-target "${{ inputs.chart-repo }}" --force-update
-        helm repo update helm-validate-target
+        case "$CHART_REPO" in
+          oci://*)
+            # An OCI registry is not a `helm repo`: helm pulls the chart by
+            # reference, so there is nothing to add.
+            echo "ref=${CHART_REPO%/}/$CHART" >> "$GITHUB_OUTPUT" ;;
+          *)
+            helm repo add helm-validate-target "$CHART_REPO" --force-update
+            helm repo update helm-validate-target
+            echo "ref=helm-validate-target/$CHART" >> "$GITHUB_OUTPUT" ;;
+        esac
 
     - name: helm template (schema validation)
       id: render
@@ -182,7 +199,7 @@ runs:
         # jetstack's cert-manager chart does, since v1.19). A removed,
         # renamed, or type-changed key fails here with a clear message
         # naming the offending path -- no changelog-reading required.
-        helm template test-release "helm-validate-target/${{ inputs.chart-name }}" \
+        helm template test-release "${{ steps.repo.outputs.ref }}" \
           --version "${{ steps.version.outputs.version }}" \
           -f "${{ inputs.values-file }}" \
           ${{ inputs.helm-set }} \

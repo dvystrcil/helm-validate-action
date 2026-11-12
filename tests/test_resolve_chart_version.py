@@ -95,6 +95,44 @@ class ResolveTest(unittest.TestCase):
             resolve.resolve(text, "kube-prometheus-stack")
 
 
+OCI = """\
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+spec:
+  sources:
+  - repoURL: 'oci://ghcr.io/immich-app/immich-charts/immich'
+    chart: '.'
+    targetRevision: 0.13.4
+    helm:
+      valueFiles:
+      - $values/values.yaml
+  - repoURL: 'https://github.com/dvystrcil/immich.git'
+    targetRevision: HEAD
+    ref: values
+"""
+
+
+class OciTest(unittest.TestCase):
+    """ArgoCD's native OCI form: the repoURL names the chart and `chart: '.'`
+    (the shape dvystrcil/argocd-projects' ARC Applications already use)."""
+
+    def test_oci_dot_source_is_found_by_its_last_path_segment(self):
+        self.assertEqual(resolve.resolve(OCI, "immich"),
+                         ("0.13.4", "oci://ghcr.io/immich-app/immich-charts"))
+
+    def test_oci_url_returned_without_the_chart_so_it_compares_to_chart_repo(self):
+        _, url = resolve.resolve(OCI, "immich")
+        self.assertTrue(resolve.same_repo(url, "oci://ghcr.io/immich-app/immich-charts/"))
+
+    def test_oci_dot_source_for_another_chart_is_not_a_match(self):
+        with self.assertRaises(resolve.ResolveError):
+            resolve.resolve(OCI, "immich-charts")
+
+    def test_https_dot_source_is_not_treated_as_oci(self):
+        text = OCI.replace("oci://ghcr.io", "https://ghcr.io")
+        with self.assertRaises(resolve.ResolveError):
+            resolve.resolve(text, "immich")
+
 class RepoUrlTest(unittest.TestCase):
     def test_trailing_slash_is_not_a_mismatch(self):
         self.assertTrue(resolve.same_repo("https://a.io/charts/", "https://a.io/charts"))

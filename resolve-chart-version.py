@@ -31,6 +31,24 @@ def _sources(spec: dict) -> list:
     return []
 
 
+def _match(source: dict, chart: str):
+    """The repo URL to report if `source` deploys `chart`, else None.
+
+    Two shapes. A classic Helm repo names the chart in `chart:`. ArgoCD's
+    native OCI form puts the chart in the repoURL and sets `chart: '.'`
+    (oci://ghcr.io/immich-app/immich-charts/immich); its URL is reported
+    without the chart segment so it compares to the action's chart-repo."""
+    name = str(source.get("chart", "")).strip()
+    url = str(source.get("repoURL", "")).strip()
+    if name == chart:
+        return url
+    if name == "." and url.startswith("oci://"):
+        base, _, last = url.rstrip("/").rpartition("/")
+        if last == chart:
+            return base
+    return None
+
+
 def resolve(text: str, chart: str) -> tuple[str, str]:
     """(targetRevision, repoURL) of the one source whose `chart:` is `chart`."""
     # BaseLoader keeps every scalar a string: SafeLoader would read an
@@ -40,7 +58,8 @@ def resolve(text: str, chart: str) -> tuple[str, str]:
         if not isinstance(doc, dict) or not isinstance(doc.get("spec"), dict):
             continue
         for s in _sources(doc["spec"]):
-            if str(s.get("chart", "")).strip() != chart:
+            url = _match(s, chart)
+            if url is None:
                 continue
             rev = str(s.get("targetRevision", "")).strip()
             if not rev:
@@ -49,7 +68,7 @@ def resolve(text: str, chart: str) -> tuple[str, str]:
                 raise ResolveError(
                     f"chart: {chart} targetRevision is templated ({rev}); "
                     "point argocd-application at a concrete Application")
-            found.append((rev, str(s.get("repoURL", "")).strip()))
+            found.append((rev, url))
     if not found:
         raise ResolveError(f"no source with chart: {chart}")
     if len({rev for rev, _ in found}) > 1:
