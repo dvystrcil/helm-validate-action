@@ -1,0 +1,17 @@
+# ArgoCD's native OCI chart form (oci://<registry path>/<chart>, chart: '.'),
+# as dvystrcil/argocd-projects immich/immich.yaml pins it.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: immich
+spec:
+  sources:
+  - repoURL: 'oci://ghcr.io/immich-app/immich-charts/immich'
+    chart: '.'
+    targetRevision: 0.13.4
+    helm:
+      valueFiles:
+      - $values/values.yaml
+  - repoURL: 'https://github.com/dvystrcil/immich.git'
+    targetRevision: HEAD
+    ref: values

@@ -156,6 +156,64 @@ jobs:
           grep -q '^kind: Deployment' "$GOOD_RENDER" || { echo "::error::rendered-file holds no manifests"; exit 1; }
           echo "ARGOCD-APPLICATION-COMPLETE"
 
+  # An OCI chart pinned in ArgoCD's native form (oci://.../immich, chart: '.'),
+  # through the REAL action.yml. immich 0.13+ ships only from OCI and has a
+  # values schema, so a removed key must fail and valid values must render.
+  oci:
+    runs-on: ubuntu-latest
+    env:
+      CHART_REPO: oci://ghcr.io/immich-app/immich-charts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Provide PyYAML
+        run: python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq python3-yaml; }
+      - name: Values
+        run: |
+          printf 'immich:\n  persistence:\n    library:\n      existingClaim: library\n' > /tmp/good-values.yaml
+          # 0.10+ fails the render if a removed subchart key is present at all.
+          { cat /tmp/good-values.yaml; printf 'postgresql:\n  enabled: false\n'; } > /tmp/bad-values.yaml
+
+      - name: "OCI pin read from the Application must render"
+        id: good
+        uses: ./
+        with:
+          chart-repo: ${{ env.CHART_REPO }}
+          chart-name: immich
+          values-file: /tmp/good-values.yaml
+          argocd-application: tests/fixtures/immich-oci-application.yaml
+          github-token: ${{ github.token }}
+          argocd-projects-repo: ${{ github.repository }}
+          argocd-projects-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: "A removed key must fail against the OCI chart"
+        id: bad
+        continue-on-error: true
+        uses: ./
+        with:
+          chart-repo: ${{ env.CHART_REPO }}
+          chart-name: immich
+          values-file: /tmp/bad-values.yaml
+          argocd-application: tests/fixtures/immich-oci-application.yaml
+          github-token: ${{ github.token }}
+          argocd-projects-repo: ${{ github.repository }}
+          argocd-projects-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Assert outcomes
+        env:
+          BAD: ${{ steps.bad.outcome }}
+          GOOD_VERSION: ${{ steps.good.outputs.chart-version }}
+          GOOD_RENDER: ${{ steps.good.outputs.rendered-file }}
+        run: |
+          set -euo pipefail
+          [ "$BAD" = failure ] || { echo "::error::removed postgresql key did not fail ($BAD)"; exit 1; }
+          [ "$GOOD_VERSION" = 0.13.4 ] || { echo "::error::chart-version output '$GOOD_VERSION', want 0.13.4"; exit 1; }
+          grep -q 'name: test-release-server' "$GOOD_RENDER" || { echo "::error::render holds no immich server"; exit 1; }
+          # Prove the bad case failed for the subchart reason, not a pull error.
+          if helm template t "$CHART_REPO/immich" --version 0.13.4 -f /tmp/bad-values.yaml >/dev/null 2>"$RUNNER_TEMP/bad.err"; then
+            echo "::error::bad values rendered"; exit 1; fi
+          grep -q 'postgres subchart has been removed' "$RUNNER_TEMP/bad.err" || { cat "$RUNNER_TEMP/bad.err"; exit 1; }
+          echo "OCI-COMPLETE"
+
   # github-token-file: the path the homelab <repo>-helm-runner sets use.
   token-file:
     runs-on: ubuntu-latest
